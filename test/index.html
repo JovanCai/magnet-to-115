@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>magnet-to-115 测试页</title>
+<style>body{font:14px/1.6 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px}section{border:1px solid #ddd;border-radius:8px;padding:10px 14px;margin:12px 0}h3{margin:4px 0}</style>
+<script>
+  // ---- GM_* shim + 115 接口模拟（仅测试用） ----
+  const mem = JSON.parse(localStorage.getItem('gm') || '{}');
+  window.GM_getValue = (k, d) => (k in mem ? mem[k] : d);
+  window.GM_setValue = (k, v) => { mem[k] = v; localStorage.setItem('gm', JSON.stringify(mem)); };
+  window.GM_registerMenuCommand = (n) => console.log('[menu]', n);
+  window.GM_setClipboard = (t) => { window.__clip = t; };
+  window.GM_openInTab = (u) => console.log('[openTab]', u);
+  window.__reqs = [];
+  window.GM_xmlhttpRequest = (o) => {
+    window.__reqs.push(o);
+    setTimeout(() => {
+      let body;
+      if (o.url.startsWith('https://clouddownload.115.com/web/')) {
+        const f = new URLSearchParams(o.data);
+        const urls = [...f.keys()].filter(k => k.startsWith('url[')).map(k => f.get(k));
+        body = { state: true, result: urls.map(u => u.includes('deadbeef') ? { state: false, errcode: 10008, error_msg: '任务已存在' } : u.includes('bad') ? { state: false, errcode: 10004, error_msg: '链接无效' } : { state: true, url: u }) };
+      } else if (o.url.startsWith('https://webapi.115.com/files')) {
+        const cid = new URL(o.url).searchParams.get('cid');
+        body = cid === '0'
+          ? { state: true, path: [{ cid: 0, name: '根目录' }], data: [{ cid: '111', n: '电影' }, { cid: '222', n: '剧集' }, { fid: '9', cid: '0', n: 'a.txt' }] }
+          : { state: true, path: [{ cid: 0, name: '根目录' }, { cid, name: cid === '111' ? '电影' : '剧集' }], data: [{ cid: cid + '1', n: '子目录A' }] };
+      } else if (o.url.startsWith('https://my.115.com/')) {
+        body = { state: true, data: { user_name: '测试用户', user_id: 1 } };
+      } else if (o.url.includes(':6800/jsonrpc')) {
+        const j = JSON.parse(o.data);
+        body = j.params[0] !== 'token:s3cret' ? { id: j.id, error: { code: 1, message: 'Unauthorized' } }
+          : j.method === 'aria2.getVersion' ? { id: j.id, result: { version: '1.37.0' } } : { id: j.id, result: 'gid' + Math.random() };
+      } else if (o.url.includes(':8080/api/v2/')) {
+        window.__qbLogged ??= false;
+        if (o.url.endsWith('/auth/login')) { window.__qbLogged = o.data.includes('password=pw'); return o.onload({ status: 200, responseText: window.__qbLogged ? 'Ok.' : 'Fails.' }); }
+        if (!window.__qbLogged) return o.onload({ status: 403, responseText: 'Forbidden' });
+        return o.onload({ status: 200, responseText: o.url.endsWith('/app/version') ? 'v5.0.2' : 'Ok.' });
+      }
+      o.onload({ status: 200, responseText: JSON.stringify(body) });
+    }, 300);
+  };
+</script>
+</head>
+<body>
+<h1>magnet-to-115 测试页</h1>
+<section><h3>1. 标准 a 标签</h3>
+  <a href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Big.Buck.Bunny.1080p.mkv&xl=1288490188&tr=udp%3A%2F%2Ftracker.example%3A80">Big Buck Bunny</a>
+  ｜ <a href="MAGNET:?xt=urn:btih:MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U&dn=base32-hash">base32 哈希</a>
+</section>
+<section><h3>2. 纯文本磁力（含中文标点粘连）</h3>
+  <p>下载地址：magnet:?xt=urn:btih:1111111111111111111111111111111111111111&dn=%E6%B5%8B%E8%AF%95%E8%A7%86%E9%A2%91，备用：magnet:?xt=urn:btih:2222222222222222222222222222222222222222。</p>
+  <pre>magnet:?xt=urn:btih:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef&dn=已存在的任务</pre>
+</section>
+<section><h3>3. ed2k</h3>
+  <a href="ed2k://|file|Sample.Movie.mkv|734003200|0123456789ABCDEF0123456789ABCDEF|/">ed2k 链接</a>
+  <p>文本 ed2k://|file|文本里的.ed2k文件.mp4|1048576|FEDCBA9876543210FEDCBA9876543210|/ 结束</p>
+</section>
+<section><h3>4. 复制按钮 / 输入框</h3>
+  <button data-clipboard-text="magnet:?xt=urn:btih:3333333333333333333333333333333333333333&dn=copy-button">复制磁力</button>
+  <br><input style="width:90%" value="magnet:?xt=urn:btih:4444444444444444444444444444444444444444&dn=input-value">
+  <br><textarea style="width:90%" rows="3">magnet:?xt=urn:btih:5555555555555555555555555555555555555555
+magnet:?xt=urn:btih:6666666666666666666666666666666666666666&dn=bad-link</textarea>
+</section>
+<section><h3>5. 动态加载</h3>
+  <button id="dyn">追加 3 个链接</button><div id="box"></div>
+</section>
+<section><h3>6. 重复链接（应去重）</h3>
+  <a href="magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567">同一哈希（大写）</a>
+  <p>非磁力文本：git 提交 0123456789abcdef0123456789abcdef01234567（默认不识别裸哈希）</p>
+</section>
+<script>
+  let n = 7;
+  document.getElementById('dyn').onclick = () => {
+    for (let i = 0; i < 3; i++, n++) {
+      const d = document.createElement('div');
+      d.textContent = `动态 #${n}: magnet:?xt=urn:btih:${String(n).repeat(40).slice(0, 40)}&dn=dynamic-${n}`;
+      document.getElementById('box').append(d);
+    }
+  };
+</script>
+<script src="../magnet-to-115.user.js"></script>
+</body>
+</html>
