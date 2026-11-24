@@ -3,7 +3,7 @@
 // @name:zh-CN   磁力一键离线：115 / aria2 / qBittorrent
 // @name:en      Magnet to 115 / aria2 / qBittorrent
 // @namespace    https://github.com/JovanCai/magnet-to-115
-// @version      1.1.0
+// @version      1.2.0
 // @description  自动识别网页里的磁力 / ed2k 链接（包括纯文本、复制按钮、输入框里的），一键或批量发送到 115 云下载、aria2 或 qBittorrent。可选 115 保存目录，会记住已添加过的链接，也支持手动粘贴添加。
 // @description:zh-CN 自动识别网页里的磁力 / ed2k 链接（包括纯文本、复制按钮、输入框里的），一键或批量发送到 115 云下载、aria2 或 qBittorrent。可选 115 保存目录，会记住已添加过的链接，也支持手动粘贴添加。
 // @description:en Detect magnet / ed2k links on any page (anchors, plain text, copy buttons, inputs) and send them to 115 cloud download, aria2 or qBittorrent in one click or in batch.
@@ -66,6 +66,7 @@
     hideAdded: false,      // 列表中隐藏已添加
     badgeY: 70,            // 悬浮球纵向位置（vh 百分比）
     disabledHosts: [],
+    lang: 'auto',          // 'auto' | 'zh' | 'en'
     defaultTarget: '115',  // '115' | 'aria2' | 'qbit'
     aria2: { enabled: false, rpc: 'http://localhost:6800/jsonrpc', secret: '', dir: '' },
     qbit: { enabled: false, url: 'http://localhost:8080', username: 'admin', password: '', savepath: '', category: '' },
@@ -76,6 +77,9 @@
   };
   let cfg = loadCfg();
   const saveCfg = () => store.set('cfg', cfg);
+  /** 界面语言：auto 时跟随浏览器（zh* 用中文，其它用英文） */
+  const isZh = () => (cfg.lang === 'zh' || (cfg.lang !== 'en' && /^zh\b/i.test(navigator.language || '')));
+  const L = (zh, en) => (isZh() ? zh : en);
 
   const history = {
     load() { return store.get('history', {}); },
@@ -101,7 +105,7 @@
   const disabledHere = cfg.disabledHosts.includes(HOST);
   const menu = (name, fn) => { try { GM_registerMenuCommand(name, fn); } catch { /* ignore */ } };
   if (disabledHere) {
-    menu(`✅ 在 ${HOST} 启用磁力探测`, () => {
+    menu(L(`✅ 在 ${HOST} 启用磁力探测`, `✅ Enable magnet detection on ${HOST}`), () => {
       cfg.disabledHosts = cfg.disabledHosts.filter(h => h !== HOST); saveCfg(); location.reload();
     });
     return;
@@ -244,20 +248,21 @@
   const isAdded = it => it.state === 'added' || it.state === 'existed' || history.has(it.key);
 
   /* ========================= 115 API ========================= */
-  function gm(opts, netMsg = '网络异常，无法连接 115') {
+  const connErr = m => Object.assign(new Error(m), { conn: true });
+  function gm(opts, netMsg = L('网络异常，无法连接 115', 'Network error: cannot reach 115')) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         timeout: TIMEOUT, anonymous: false, ...opts,
         onload: r => resolve({ status: r.status, text: r.responseText ?? '' }),
         onerror: () => reject(new Error(netMsg)),
-        ontimeout: () => reject(new Error('请求 115 超时')),
+        ontimeout: () => reject(new Error(L('请求超时', 'Request timed out'))),
       });
     });
   }
   const DUP_RE = /无法重复|任务已存在|重复(?:下载|添加)|请勿重复|无需重复|already exists/i;
   const codeOf = j => j?.errcode ?? j?.errno ?? j?.code;
   const isDup = j => Number(codeOf(j)) === 10008 || DUP_RE.test(String(j?.error_msg || j?.error || j?.msg || ''));
-  const errText = j => j?.error_msg || j?.error || j?.msg || `错误码 ${codeOf(j)}`;
+  const errText = j => j?.error_msg || j?.error || j?.msg || L(`错误码 ${codeOf(j)}`, `Error code ${codeOf(j)}`);
   const isLoginErr = j => [990001, 99, 990002].includes(Number(codeOf(j))) || /登录|login/i.test(errText(j));
 
   /**
@@ -280,14 +285,14 @@
       }
       let j;
       try { j = JSON.parse(r.text); } catch {
-        fatal = 'login'; fatalMsg = `HTTP ${r.status}，可能未登录 115`;
+        fatal = 'login'; fatalMsg = L(`HTTP ${r.status}，可能未登录 115`, `HTTP ${r.status}, probably not signed in to 115`);
         part.forEach(u => per.set(u, { status: 'failed', msg: fatalMsg })); continue;
       }
       if (!j.state) {
         if (isDup(j)) { part.forEach(u => per.set(u, { status: 'existed', msg: errText(j) })); continue; }
         const msg = errText(j);
-        if (Number(codeOf(j)) === 911) { fatal = 'verify'; fatalMsg = `${msg}（需要在 115 网页版完成一次验证）`; }
-        else if (isLoginErr(j)) { fatal = 'login'; fatalMsg = `${msg}（请先登录 115）`; }
+        if (Number(codeOf(j)) === 911) { fatal = 'verify'; fatalMsg = L(`${msg}（需要在 115 网页版完成一次验证）`, `${msg} (verify once on the 115 website first)`); }
+        else if (isLoginErr(j)) { fatal = 'login'; fatalMsg = L(`${msg}（请先登录 115）`, `${msg} (please sign in to 115)`); }
         part.forEach(u => per.set(u, { status: 'failed', msg: fatalMsg || msg }));
         continue;
       }
@@ -310,14 +315,15 @@
     });
     const r = await gm({ method: 'GET', url: `${API_FILES}?${q}` });
     let j;
-    try { j = JSON.parse(r.text); } catch { throw new Error('读取目录失败，可能未登录 115'); }
-    if (!j.state) throw new Error(errText(j) || '读取目录失败');
+    try { j = JSON.parse(r.text); } catch { throw new Error(L('读取目录失败，可能未登录 115', 'Failed to load folders, probably not signed in to 115')); }
+    if (!j.state) throw new Error(errText(j) || L('读取目录失败', 'Failed to load folders'));
     const dirs = (j.data || [])
       .filter(x => x && x.cid != null && x.fid == null)
       .map(x => ({ cid: String(x.cid), name: String(x.n ?? x.name ?? x.cid) }))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
-    let path = (j.path || []).map(p => ({ cid: String(p.cid), name: String(p.name || (String(p.cid) === '0' ? '根目录' : p.cid)) }));
-    if (!path.length || path[0].cid !== '0') path.unshift({ cid: '0', name: '根目录' });
+    const ROOT = L('根目录', 'Root');
+    let path = (j.path || []).map(p => ({ cid: String(p.cid), name: String(p.cid) === '0' ? ROOT : String(p.name || p.cid) }));
+    if (!path.length || path[0].cid !== '0') path.unshift({ cid: '0', name: ROOT });
     path = path.filter((p, i, a) => a.findIndex(x => x.cid === p.cid) === i);
     return { dirs, path };
   }
@@ -326,7 +332,7 @@
     try {
       const r = await gm({ method: 'GET', url: API_NAV });
       const j = JSON.parse(r.text);
-      if (j.state && j.data) return { ok: true, name: j.data.user_name || j.data.user_id || '已登录' };
+      if (j.state && j.data) return { ok: true, name: j.data.user_name || j.data.user_id || '' };
       return { ok: false };
     } catch { return { ok: null }; }
   }
@@ -336,26 +342,28 @@
   /** 校验用户配置的服务地址；非本机地址首次连接需确认 */
   function checkUrl(raw, name) {
     raw = String(raw ?? '').trim();
-    if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) throw new Error(`${name} 地址未填写或格式无效`);
+    const badScheme = L(`${name} 地址需以 http:// 或 https:// 开头`, `${name} URL must start with http:// or https://`);
+    if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) throw connErr(L(`${name} 地址未填写或格式无效`, `${name} URL is empty or invalid`));
     let u;
-    try { u = new URL(raw); } catch { throw new Error(`${name} 地址需以 http:// 或 https:// 开头`); }
-    if (!/^https?:$/.test(u.protocol)) throw new Error(`${name} 地址需以 http:// 或 https:// 开头`);
-    if (u.username || u.password) throw new Error(`${name} 地址中不能包含账号密码`);
+    try { u = new URL(raw); } catch { throw connErr(badScheme); }
+    if (!/^https?:$/.test(u.protocol)) throw connErr(badScheme);
+    if (u.username || u.password) throw connErr(L(`${name} 地址中不能包含账号密码`, `${name} URL must not contain credentials`));
     if (!isLoopback(u.hostname)) {
       const allowed = store.get('allowedHosts', []);
       if (!allowed.includes(u.host)) {
-        if (!confirm(`确认将下载任务发送到 ${u.host}（${name}）？\n\n仅当该服务由你本人控制时点击「确定」。`)) throw new Error(`未授权连接 ${u.host}`);
+        if (!confirm(L(`确认将下载任务发送到 ${u.host}（${name}）？\n\n仅当该服务由你本人控制时点击「确定」。`,
+          `Send download tasks to ${u.host} (${name})?\n\nOnly click OK if you control this service.`))) throw connErr(L(`未授权连接 ${u.host}`, `Connection to ${u.host} not allowed`));
         store.set('allowedHosts', [...allowed, u.host]);
       }
     }
     return (u.origin + u.pathname).replace(/\/+$/, '');
   }
   const noCtrl = (v, name) => {
-    if (/[\r\n\u0000]/.test(v || '')) throw new Error(`${name} 包含非法字符`);
+    if (/[\r\n\u0000]/.test(v || '')) throw new Error(L(`${name} 包含非法字符`, `${name} contains invalid characters`));
     return v || '';
   };
 
-  const ARIA2_NET = '无法连接 aria2：请检查 RPC 地址、aria2 是否运行以及 --enable-rpc';
+  const ARIA2_NET = () => L('无法连接 aria2：请检查 RPC 地址、aria2 是否运行以及 --enable-rpc', 'Cannot reach aria2: check the RPC URL, that aria2 is running, and --enable-rpc');
   async function aria2Call(method, params = []) {
     const a = cfg.aria2;
     const url = checkUrl(a.rpc, 'aria2 RPC');
@@ -363,15 +371,18 @@
     const r = await gm({
       method: 'POST', url, headers: { 'Content-Type': 'application/json' },
       data: JSON.stringify({ jsonrpc: '2.0', id: 'm115', method, params: [...token, ...params] }),
-    }, ARIA2_NET);
+    }, ARIA2_NET()).catch(e => { throw connErr(e.message); });
     let j;
-    try { j = JSON.parse(r.text); } catch { throw new Error(`aria2 返回 HTTP ${r.status}，请检查 RPC 地址`); }
-    if (j.error) throw new Error(j.error.message === 'Unauthorized' ? 'aria2 密钥（secret）错误' : `aria2：${String(j.error.message).slice(0, 100)}`);
+    try { j = JSON.parse(r.text); } catch { throw connErr(L(`aria2 返回 HTTP ${r.status}，请检查 RPC 地址`, `aria2 returned HTTP ${r.status}, check the RPC URL`)); }
+    if (j.error) {
+      if (j.error.message === 'Unauthorized') throw connErr(L('aria2 密钥（secret）错误', 'Wrong aria2 secret'));
+      throw new Error(`aria2: ${String(j.error.message).slice(0, 100)}`);
+    }
     return j.result;
   }
   async function addAria2(urls) {
     const per = new Map();
-    const opt = cfg.aria2.dir ? { dir: noCtrl(cfg.aria2.dir, '保存目录') } : {};
+    const opt = cfg.aria2.dir ? { dir: noCtrl(cfg.aria2.dir, L('保存目录', 'Save folder')) } : {};
     let fatalMsg = '';
     for (const u of urls) {
       if (fatalMsg) { per.set(u, { status: 'failed', msg: fatalMsg }); continue; }
@@ -382,28 +393,28 @@
         if (/already registered|duplicate/i.test(e.message)) per.set(u, { status: 'existed', msg: e.message });
         else {
           per.set(u, { status: 'failed', msg: e.message });
-          if (/无法连接|密钥|未授权|地址|HTTP/.test(e.message)) fatalMsg = e.message; // 连接级错误，后续不再尝试
+          if (e.conn) fatalMsg = e.message; // 连接级错误，后续不再尝试
         }
       }
     }
     return { per, fatal: fatalMsg ? 'conn' : null, fatalMsg };
   }
 
-  const QB_NET = '无法连接 qBittorrent：请检查 WebUI 地址、程序是否运行以及是否开启 WebUI';
+  const QB_NET = () => L('无法连接 qBittorrent：请检查 WebUI 地址、程序是否运行以及是否开启 WebUI', 'Cannot reach qBittorrent: check the WebUI URL, that it is running, and that WebUI is enabled');
   async function qbitReq(opts) {
     const q = cfg.qbit;
     const base = checkUrl(q.url, 'qBittorrent WebUI');
     const hdr = { Referer: `${base}/`, Origin: base };
-    const send = () => gm({ ...opts, url: base + opts.path, headers: { ...hdr, ...(opts.headers || {}) } }, QB_NET);
+    const send = () => gm({ ...opts, url: base + opts.path, headers: { ...hdr, ...(opts.headers || {}) } }, QB_NET());
     const r = await send();
     if (r.status !== 403 && r.status !== 401) return r;
     const lr = await gm({
       method: 'POST', url: `${base}/api/v2/auth/login`,
       headers: { ...hdr, 'Content-Type': 'application/x-www-form-urlencoded' },
       data: new URLSearchParams({ username: q.username || '', password: q.password || '' }).toString(),
-    }, QB_NET);
-    if (lr.status === 403) throw new Error('qBittorrent 登录失败次数过多，IP 已被临时封禁');
-    if (lr.status !== 200 || lr.text.trim() === 'Fails.') throw new Error('qBittorrent 用户名或密码错误');
+    }, QB_NET());
+    if (lr.status === 403) throw new Error(L('qBittorrent 登录失败次数过多，IP 已被临时封禁', 'Too many failed qBittorrent logins, IP temporarily banned'));
+    if (lr.status !== 200 || lr.text.trim() === 'Fails.') throw new Error(L('qBittorrent 用户名或密码错误', 'Wrong qBittorrent username or password'));
     return send();
   }
   async function addQbit(urls) {
@@ -413,28 +424,30 @@
       const q = cfg.qbit;
       const buf = new Uint8Array(12); crypto.getRandomValues(buf);
       const boundary = '----m115' + Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
-      const fields = { urls: urls.join('\n'), savepath: noCtrl(q.savepath, '保存目录'), category: noCtrl(q.category, '分类') };
+      const fields = { urls: urls.join('\n'), savepath: noCtrl(q.savepath, L('保存目录', 'Save path')), category: noCtrl(q.category, L('分类', 'Category')) };
       const data = Object.entries(fields).filter(([, v]) => v)
         .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join('') + `--${boundary}--\r\n`;
       const r = await qbitReq({ method: 'POST', path: '/api/v2/torrents/add', headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }, data });
       if (r.status === 200 && r.text.trim() !== 'Fails.') { urls.forEach(u => per.set(u, { status: 'added', msg: '' })); return { per, fatal: null }; }
-      if (r.status === 200) { urls.forEach(u => per.set(u, { status: 'failed', msg: 'qBittorrent 拒绝添加（可能已存在或链接无效）' })); return { per, fatal: null }; }
-      return fail(`qBittorrent 添加失败（HTTP ${r.status}）`);
+      if (r.status === 200) { urls.forEach(u => per.set(u, { status: 'failed', msg: L('qBittorrent 拒绝添加（可能已存在或链接无效）', 'qBittorrent rejected it (already exists or invalid link)') })); return { per, fatal: null }; }
+      return fail(L(`qBittorrent 添加失败（HTTP ${r.status}）`, `qBittorrent add failed (HTTP ${r.status})`));
     } catch (e) { return fail(e.message); }
   }
 
   async function testTarget(type) {
     const ver = v => { const s = String(v ?? '').trim(); return /^v?\d[\w.+-]{0,30}$/.test(s) ? s : ''; };
-    if (type === 'aria2') return `aria2 ${ver((await aria2Call('aria2.getVersion'))?.version) || ''} 连接成功`;
+    const okMsg = L('连接成功', 'connected');
+    if (type === 'aria2') return `aria2 ${ver((await aria2Call('aria2.getVersion'))?.version) || ''} ${okMsg}`;
     const r = await qbitReq({ method: 'GET', path: '/api/v2/app/version' });
-    if (r.status !== 200) throw new Error(`qBittorrent 返回 HTTP ${r.status}`);
-    return `qBittorrent ${ver(r.text)} 连接成功`;
+    if (r.status !== 200) throw new Error(L(`qBittorrent 返回 HTTP ${r.status}`, `qBittorrent returned HTTP ${r.status}`));
+    return `qBittorrent ${ver(r.text)} ${okMsg}`;
   }
 
   /* ========================= 下载目标 ========================= */
   // dest: {type:'115', cid, name} | {type:'aria2', name} | {type:'qbit', name}
   const SHORT = { 115: '115', aria2: 'aria2', qbit: 'qB' };
-  const folderLabel = () => cfg.folderName || (cfg.folderId ? `目录 ${cfg.folderId}` : '默认目录');
+  const folderLabel = () => cfg.folderName || (cfg.folderId ? L(`目录 ${cfg.folderId}`, `Folder ${cfg.folderId}`) : L('默认目录', 'Default folder'));
+  const DEF = () => L('（默认）', ' (default)');
   const destKey = d => (d.type === '115' ? `115:${d.cid}` : d.type);
   const destLabel = d => (d.type === '115' ? `115 · ${d.name}` : d.name);
   const aria2Dest = () => ({ type: 'aria2', name: cfg.aria2.dir ? `aria2 · ${cfg.aria2.dir}` : 'aria2' });
@@ -465,7 +478,7 @@
     const label = destLabel(dest);
     list.forEach(it => { it.state = 'loading'; it.msg = ''; });
     refreshAll();
-    const t = toast(`正在发送 ${list.length} 个链接到「${label}」…`, { type: 'info', timeout: 0 });
+    const t = toast(L(`正在发送 ${list.length} 个链接到「${label}」…`, `Sending ${list.length} link(s) to "${label}"…`), { type: 'info', timeout: 0 });
     let res;
     try {
       const urls = list.map(it => it.url);
@@ -474,12 +487,12 @@
           : await add115(urls, dest.cid);
     } catch (e) {
       list.forEach(it => { it.state = 'error'; it.msg = e.message; });
-      t.close(); toast(`发送失败：${e.message}`, { type: 'err' }); refreshAll(); return;
+      t.close(); toast(L(`发送失败：${e.message}`, `Send failed: ${e.message}`), { type: 'err' }); refreshAll(); return;
     }
     t.close();
     let added = 0, existed = 0; const failed = []; const ok = [];
     for (const it of list) {
-      const r = res.per.get(it.url) || { status: 'failed', msg: '无返回' };
+      const r = res.per.get(it.url) || { status: 'failed', msg: L('无返回', 'No response') };
       it.state = r.status === 'failed' ? 'error' : r.status; it.msg = r.msg;
       if (r.status === 'added') { added++; ok.push(it.key); }
       else if (r.status === 'existed') { existed++; ok.push(it.key); }
@@ -490,21 +503,22 @@
     refreshAll();
 
     const parts = [];
-    if (added) parts.push(`成功 ${added}`);
-    if (existed) parts.push(`已存在 ${existed}`);
-    if (failed.length) parts.push(`失败 ${failed.length}`);
-    const actions = dest.type === '115' ? [{ text: '打开云下载', fn: () => openTab(URL_OFFLINE) }] : [];
+    if (added) parts.push(L(`成功 ${added}`, `${added} added`));
+    if (existed) parts.push(L(`已存在 ${existed}`, `${existed} already existed`));
+    if (failed.length) parts.push(L(`失败 ${failed.length}`, `${failed.length} failed`));
+    const sum = parts.join(L('，', ', '));
+    const actions = dest.type === '115' ? [{ text: L('打开云下载', 'Open 115 downloads'), fn: () => openTab(URL_OFFLINE) }] : [];
     if (res.fatal === 'verify') {
-      toast(res.fatalMsg, { type: 'err', timeout: 0, actions: [{ text: '去 115 验证', fn: () => openTab(URL_OFFLINE) }] });
+      toast(res.fatalMsg, { type: 'err', timeout: 0, actions: [{ text: L('去 115 验证', 'Verify on 115'), fn: () => openTab(URL_OFFLINE) }] });
     } else if (res.fatal === 'login') {
-      toast(res.fatalMsg, { type: 'err', timeout: 0, actions: [{ text: '登录 115', fn: () => openTab(URL_LOGIN) }] });
+      toast(res.fatalMsg, { type: 'err', timeout: 0, actions: [{ text: L('登录 115', 'Sign in to 115'), fn: () => openTab(URL_LOGIN) }] });
     } else if (res.fatal === 'conn') {
-      toast(res.fatalMsg, { type: 'err', timeout: 10000, actions: [{ text: '打开设置', fn: () => openPanel('settings') }, { text: '重试', fn: () => sendTo(failed, dest) }] });
+      toast(res.fatalMsg, { type: 'err', timeout: 10000, actions: [{ text: L('打开设置', 'Settings'), fn: () => openPanel('settings') }, { text: L('重试', 'Retry'), fn: () => sendTo(failed, dest) }] });
     } else if (failed.length) {
-      actions.unshift({ text: '重试失败项', fn: () => sendTo(failed, dest) });
-      toast(`${parts.join('，')}｜${failed[0].msg}`, { type: added || existed ? 'warn' : 'err', timeout: 10000, actions });
+      actions.unshift({ text: L('重试失败项', 'Retry failed'), fn: () => sendTo(failed, dest) });
+      toast(`${sum} | ${failed[0].msg}`, { type: added || existed ? 'warn' : 'err', timeout: 10000, actions });
     } else {
-      toast(`已发送到「${label}」：${parts.join('，')}`, { type: 'ok', actions });
+      toast(L(`已发送到「${label}」：${sum}`, `Sent to "${label}": ${sum}`), { type: 'ok', actions });
     }
   }
 
@@ -538,20 +552,20 @@
         const dest = defaultDest();
         const s = SHORT[dest.type];
         b.textContent = busy ? '…' : err ? `!${s}${n}` : done ? `✓${s}${n}` : `${s}${n}`;
-        const nm = list.length === 1 ? (list[0].name || list[0].hash) : `${list.length} 个链接`;
+        const nm = list.length === 1 ? (list[0].name || list[0].hash) : L(`${list.length} 个链接`, `${list.length} links`);
         b.title = [
           nm,
-          err ? `上次失败：${err.msg}` : done ? '已添加过（点击可再次提交）' : '',
-          `点击：发送到「${destLabel(dest)}」`,
-          '右键 / Shift+点击：选择目标 / 目录',
-          'Alt+点击：复制链接',
+          err ? L(`上次失败：${err.msg}`, `Last attempt failed: ${err.msg}`) : done ? L('已添加过（点击可再次提交）', 'Already added (click to send again)') : '',
+          L(`点击：发送到「${destLabel(dest)}」`, `Click: send to "${destLabel(dest)}"`),
+          L('右键 / Shift+点击：选择目标 / 目录', 'Right-click / Shift+click: choose target or folder'),
+          L('Alt+点击：复制链接', 'Alt+click: copy link'),
         ].filter(Boolean).join('\n');
       },
     };
     const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); };
     b.addEventListener('click', e => {
       stop(e);
-      if (e.altKey) { copyText(list.map(it => it.url).join('\n')); toast('已复制链接', { type: 'ok', timeout: 1500 }); return; }
+      if (e.altKey) { copyText(list.map(it => it.url).join('\n')); toast(L('已复制链接', 'Link copied'), { type: 'ok', timeout: 1500 }); return; }
       if (e.shiftKey) { const r = b.getBoundingClientRect(); showDestMenu(r.left, r.bottom + 4, d => sendTo(list, d)); return; }
       sendTo(list);
     }, true);
@@ -814,7 +828,7 @@
     let closed = false;
     const close = () => { if (!closed) { closed = true; el.remove(); } };
     for (const a of actions) el.append(h('button', { onclick: () => { a.fn(); close(); } }, a.text));
-    el.append(h('button', { onclick: close, title: '关闭' }, '×'));
+    el.append(h('button', { onclick: close, title: L('关闭', 'Close') }, '×'));
     toasts.append(el);
     while (toasts.children.length > 4) toasts.firstChild.remove();
     if (timeout) setTimeout(close, timeout);
@@ -826,13 +840,13 @@
   function showDestMenu(x, y, onPick) {
     closeMenu();
     const u = ui();
-    const m = h('div', { class: 'menu' }, h('div', { class: 'mh' }, '发送到…'));
+    const m = h('div', { class: 'menu' }, h('div', { class: 'mh' }, L('发送到…', 'Send to…')));
     for (const d of destChoices()) {
       const label = destLabel(d);
       m.append(h('button', { title: label, onclick: () => { closeMenu(); onPick(d); } },
-        icon(d.isDefault ? 'star' : d.type === '115' ? 'folder' : 'download', 14), d.isDefault ? `${label}（默认）` : label));
+        icon(d.isDefault ? 'star' : d.type === '115' ? 'folder' : 'download', 14), d.isDefault ? label + DEF() : label));
     }
-    m.append(h('button', { onclick: () => { closeMenu(); openFolderPicker('选择 115 保存目录', f => onPick(destFromFolder(f))); } }, icon('folder', 14), '浏览 115 目录…'));
+    m.append(h('button', { onclick: () => { closeMenu(); openFolderPicker(L('选择 115 保存目录', 'Choose 115 folder'), f => onPick(destFromFolder(f))); } }, icon('folder', 14), L('浏览 115 目录…', 'Browse 115 folders…')));
     u.root.append(m);
     const r = m.getBoundingClientRect();
     m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
@@ -846,25 +860,25 @@
   /* ---------- 目录浏览器 ---------- */
   function openFolderPicker(title, onPick, { extra } = {}) {
     const u = ui();
-    let cur = { cid: '0', name: '根目录' };
+    let cur = { cid: '0', name: L('根目录', 'Root') };
     const crumb = h('div', { class: 'crumb' });
     const listEl = h('div', { class: 'bd' });
-    const cidIn = h('input', { type: 'text', placeholder: '或输入目录 ID (cid)', style: 'flex:1;min-width:0' });
-    const pickBtn = h('button', { class: 'btn pr' }, '选择此目录');
+    const cidIn = h('input', { type: 'text', placeholder: L('或输入目录 ID (cid)', 'Or enter folder ID (cid)'), style: 'flex:1;min-width:0' });
+    const pickBtn = h('button', { class: 'btn pr' }, L('选择此目录', 'Choose this folder'));
     const close = () => mask.remove();
     const dlg = h('div', { class: 'dlg' },
       h('div', { class: 'hd', style: 'border-bottom:1px solid var(--bd)' },
         h('span', { style: 'flex:1' }, title),
         h('button', { class: 'x', style: 'margin:0', onclick: close }, icon('close'))),
       crumb, listEl,
-      h('div', { class: 'ft' }, cidIn, h('button', { class: 'btn', onclick: () => { const v = cidIn.value.trim(); if (/^\d+$/.test(v)) load(v); } }, '转到'), pickBtn));
+      h('div', { class: 'ft' }, cidIn, h('button', { class: 'btn', onclick: () => { const v = cidIn.value.trim(); if (/^\d+$/.test(v)) load(v); } }, L('转到', 'Go')), pickBtn));
     const mask = h('div', { class: 'mask', onclick: e => { if (e.target === mask) close(); } }, dlg);
     pickBtn.addEventListener('click', () => { close(); onPick({ cid: cur.cid === '0' ? '0' : cur.cid, name: cur.name }); });
     if (extra) dlg.querySelector('.ft').prepend(extra(() => cur, close));
     u.root.append(mask);
 
     async function load(cid) {
-      listEl.replaceChildren(h('div', { class: 'empty' }, '加载中…'));
+      listEl.replaceChildren(h('div', { class: 'empty' }, L('加载中…', 'Loading…')));
       try {
         const { dirs, path } = await listFolders(cid);
         cur = path[path.length - 1] || { cid, name: cid };
@@ -873,13 +887,13 @@
           i ? h('span', { class: 'mut' }, '/') : null,
           h('button', { onclick: () => load(p.cid) }, p.name),
         ]).filter(Boolean));
-        pickBtn.textContent = `选择「${cur.name}」`;
+        pickBtn.textContent = L(`选择「${cur.name}」`, `Choose "${cur.name}"`);
         listEl.replaceChildren(...(dirs.length ? dirs.map(d => h('div', { class: 'dir', onclick: () => load(d.cid) },
-          icon('folder', 18), h('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, d.name))) : [h('div', { class: 'empty' }, '没有子目录')]));
+          icon('folder', 18), h('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, d.name))) : [h('div', { class: 'empty' }, L('没有子目录', 'No subfolders'))]));
       } catch (e) {
         listEl.replaceChildren(h('div', { class: 'empty' }, e.message, h('br'), h('br'),
-          h('button', { class: 'btn', onclick: () => openTab(URL_LOGIN) }, '登录 115'), ' ',
-          h('button', { class: 'btn', onclick: () => load(cid) }, '重试')));
+          h('button', { class: 'btn', onclick: () => openTab(URL_LOGIN) }, L('登录 115', 'Sign in to 115')), ' ',
+          h('button', { class: 'btn', onclick: () => load(cid) }, L('重试', 'Retry'))));
       }
     }
     load('0');
@@ -893,7 +907,7 @@
     if (!show) { if (u.badge) u.badge.style.display = 'none'; return; }
     if (!u.badge) {
       const cnt = h('span', { class: 'cnt' });
-      const b = h('button', { class: 'badge', title: '磁力 → 115（Alt+Shift+M）\n拖动可调整位置' }, icon('magnet', 15), cnt);
+      const b = h('button', { class: 'badge', title: L('磁力链接面板（Alt+Shift+M）\n拖动可调整位置', 'Magnet links panel (Alt+Shift+M)\nDrag to move') }, icon('magnet', 15), cnt);
       b.style.top = `calc(${cfg.badgeY}vh - 15px)`;
       let sy = 0, moved = false, startTop = 0;
       b.addEventListener('pointerdown', e => {
@@ -942,8 +956,8 @@
     const panel = h('div', { class: 'panel' },
       h('div', { class: 'hd' },
         h('span', { class: 'ttl' }, icon('magnet', 18), '115'),
-        h('div', { class: 'tabs' }, tabBtn('links', `页面链接 (${all.length})`), tabBtn('manual', '手动添加'), tabBtn('settings', '设置')),
-        h('button', { class: 'x', title: '关闭 (Esc)', onclick: closePanel }, icon('close'))));
+        h('div', { class: 'tabs' }, tabBtn('links', L(`页面链接 (${all.length})`, `Links (${all.length})`)), tabBtn('manual', L('手动添加', 'Manual')), tabBtn('settings', L('设置', 'Settings'))),
+        h('button', { class: 'x', title: L('关闭 (Esc)', 'Close (Esc)'), onclick: closePanel }, icon('close'))));
     if (P.tab === 'links') panel.append(...linksView(all));
     else if (P.tab === 'manual') panel.append(...manualView());
     else panel.append(...settingsView());
@@ -956,17 +970,17 @@
   function folderSelect() {
     const choices = destChoices();
     const cur = currentDest();
-    const sel = h('select', { title: '发送目标' },
+    const sel = h('select', { title: L('发送目标', 'Send target') },
       ...choices.map(d => {
-        const o = h('option', { value: destKey(d) }, `${d.type === '115' ? '📁' : '⬇️'} ${destLabel(d)}${d.isDefault ? '（默认）' : ''}`);
+        const o = h('option', { value: destKey(d) }, `${d.type === '115' ? '📁' : '⬇️'} ${destLabel(d)}${d.isDefault ? DEF() : ''}`);
         if (destKey(d) === destKey(cur)) o.selected = true;
         return o;
       }),
-      h('option', { value: 'browse' }, '浏览 115 目录…'));
+      h('option', { value: 'browse' }, L('浏览 115 目录…', 'Browse 115 folders…')));
     sel.addEventListener('change', () => {
       if (sel.value === 'browse') {
         sel.value = destKey(cur);
-        openFolderPicker('选择 115 保存目录', f => {
+        openFolderPicker(L('选择 115 保存目录', 'Choose 115 folder'), f => {
           if (!cfg.favFolders.some(x => x.cid === f.cid) && f.cid !== cfg.folderId) { cfg.favFolders.push(f); saveCfg(); }
           P.destKey = destKey(destFromFolder(f));
           renderPanel();
@@ -978,11 +992,11 @@
   const currentDest = () => { const c = destChoices(); return c.find(d => destKey(d) === P.destKey) || c[0]; };
 
   function stateTag(it) {
-    if (it.state === 'loading') return h('span', { class: 'tag busy' }, '提交中');
-    if (it.state === 'error') return h('span', { class: 'tag err', title: it.msg }, '失败');
-    if (it.state === 'added') return h('span', { class: 'tag ok' }, '已添加');
-    if (it.state === 'existed') return h('span', { class: 'tag ok', title: it.msg }, '已存在');
-    if (history.has(it.key)) return h('span', { class: 'tag ok', title: '历史记录中已添加过' }, '添加过');
+    if (it.state === 'loading') return h('span', { class: 'tag busy' }, L('提交中', 'Sending'));
+    if (it.state === 'error') return h('span', { class: 'tag err', title: it.msg }, L('失败', 'Failed'));
+    if (it.state === 'added') return h('span', { class: 'tag ok' }, L('已添加', 'Added'));
+    if (it.state === 'existed') return h('span', { class: 'tag ok', title: it.msg }, L('已存在', 'Exists'));
+    if (history.has(it.key)) return h('span', { class: 'tag ok', title: L('历史记录中已添加过', 'Added before (history)') }, L('添加过', 'Added before'));
     return null;
   }
 
@@ -1004,15 +1018,15 @@
       && (!kw || (it.name + ' ' + it.hash + ' ' + it.url).toLowerCase().includes(kw)));
     const selShown = shown.filter(it => P.sel.has(it.key));
 
-    const allCk = h('input', { type: 'checkbox', title: '全选 / 取消', checked: shown.length > 0 && selShown.length === shown.length });
+    const allCk = h('input', { type: 'checkbox', title: L('全选 / 取消', 'Select all / none'), checked: shown.length > 0 && selShown.length === shown.length });
     allCk.indeterminate = selShown.length > 0 && selShown.length < shown.length;
     allCk.addEventListener('change', () => { shown.forEach(it => (allCk.checked ? P.sel.add(it.key) : P.sel.delete(it.key))); renderPanel(); });
-    const search = h('input', { type: 'search', placeholder: '筛选名称 / 哈希', value: P.filter, 'data-role': 'search' });
+    const search = h('input', { type: 'search', placeholder: L('筛选名称 / 哈希', 'Filter by name / hash'), value: P.filter, 'data-role': 'search' });
     search.addEventListener('input', () => { P.filter = search.value; renderPanel(); });
     const hideCk = h('input', { type: 'checkbox', checked: cfg.hideAdded });
     hideCk.addEventListener('change', () => { cfg.hideAdded = hideCk.checked; saveCfg(); renderPanel(); });
 
-    const bar = h('div', { class: 'bar' }, allCk, search, h('label', { class: 'ck', title: '隐藏已添加过的链接' }, hideCk, '隐藏已添加'));
+    const bar = h('div', { class: 'bar' }, allCk, search, h('label', { class: 'ck', title: L('隐藏已添加过的链接', 'Hide links added before') }, hideCk, L('隐藏已添加', 'Hide added')));
 
     const rows = shown.map(it => {
       const ck = h('input', { type: 'checkbox', checked: P.sel.has(it.key) });
@@ -1031,23 +1045,23 @@
           it.size ? h('span', null, fmtSize(it.size)) : null,
           h('span', null, it.hash.slice(0, 10) + '…'),
           stateTag(it))),
-      h('button', { class: 'ib', title: '在页面中定位', onclick: e => { e.stopPropagation(); locate(it); } }, icon('locate')),
-      h('button', { class: 'ib', title: '复制链接', onclick: e => { e.stopPropagation(); copyText(it.url); toast('已复制', { type: 'ok', timeout: 1200 }); } }, icon('copy')),
-      h('button', { class: 'btn sm', title: '单独发送到所选目标', onclick: e => { e.stopPropagation(); sendTo([it], currentDest()); } }, SHORT[currentDest().type]));
+      h('button', { class: 'ib', title: L('在页面中定位', 'Locate on page'), onclick: e => { e.stopPropagation(); locate(it); } }, icon('locate')),
+      h('button', { class: 'ib', title: L('复制链接', 'Copy link'), onclick: e => { e.stopPropagation(); copyText(it.url); toast(L('已复制', 'Copied'), { type: 'ok', timeout: 1200 }); } }, icon('copy')),
+      h('button', { class: 'btn sm', title: L('单独发送到所选目标', 'Send this one to the selected target'), onclick: e => { e.stopPropagation(); sendTo([it], currentDest()); } }, SHORT[currentDest().type]));
     });
 
     const body = h('div', { class: 'bd' }, bar, ...(rows.length ? rows : [h('div', { class: 'empty' },
-      all.length ? '没有符合条件的链接' : '当前页面未检测到磁力 / ed2k 链接', h('br'), h('br'),
-      h('button', { class: 'btn', onclick: () => openPanel('manual') }, '手动粘贴链接'))]));
+      all.length ? L('没有符合条件的链接', 'No matching links') : L('当前页面未检测到磁力 / ed2k 链接', 'No magnet / ed2k links found on this page'), h('br'), h('br'),
+      h('button', { class: 'btn', onclick: () => openPanel('manual') }, L('手动粘贴链接', 'Paste links manually')))]));
 
     const selected = all.filter(it => P.sel.has(it.key));
-    const copyBtn = h('button', { class: 'btn', disabled: !selected.length, onclick: () => { copyText(selected.map(i => i.url).join('\n')); toast(`已复制 ${selected.length} 条链接`, { type: 'ok', timeout: 1500 }); } }, '复制');
-    const addBtn = h('button', { class: 'btn pr', disabled: !selected.length, onclick: () => sendTo(selected, currentDest()) }, `发送 (${selected.length})`);
+    const copyBtn = h('button', { class: 'btn', disabled: !selected.length, onclick: () => { copyText(selected.map(i => i.url).join('\n')); toast(L(`已复制 ${selected.length} 条链接`, `Copied ${selected.length} link(s)`), { type: 'ok', timeout: 1500 }); } }, L('复制', 'Copy'));
+    const addBtn = h('button', { class: 'btn pr', disabled: !selected.length, onclick: () => sendTo(selected, currentDest()) }, L(`发送 (${selected.length})`, `Send (${selected.length})`));
     return [body, h('div', { class: 'ft' }, folderSelect(), copyBtn, addBtn)];
   }
 
   function manualView() {
-    const ta = h('textarea', { placeholder: '粘贴磁力链接 / ed2k 链接 / 40 位哈希，每行一个；\n也可以直接粘贴包含链接的整段文本，会自动提取。' });
+    const ta = h('textarea', { placeholder: L('粘贴磁力链接 / ed2k 链接 / 40 位哈希，每行一个；\n也可以直接粘贴包含链接的整段文本，会自动提取。', 'Paste magnet / ed2k links or 40-char hashes, one per line.\nYou can also paste any text that contains links; they will be extracted.') });
     ta.value = P.manualText;
     const info = h('span', { class: 'mut', style: 'flex:1' });
     const addBtn = h('button', { class: 'btn pr' });
@@ -1055,8 +1069,8 @@
     const upd = () => {
       P.manualText = ta.value;
       const n = parse().length;
-      info.textContent = n ? `识别到 ${n} 个链接` : '未识别到链接';
-      addBtn.textContent = `发送 (${n})`; addBtn.disabled = !n;
+      info.textContent = n ? L(`识别到 ${n} 个链接`, `${n} link(s) found`) : L('未识别到链接', 'No links found');
+      addBtn.textContent = L(`发送 (${n})`, `Send (${n})`); addBtn.disabled = !n;
     };
     ta.addEventListener('input', upd);
     addBtn.addEventListener('click', () => {
@@ -1069,9 +1083,9 @@
     });
     const pasteBtn = h('button', { class: 'btn sm', onclick: async () => {
       try { const t = await navigator.clipboard.readText(); ta.value = (ta.value ? ta.value + '\n' : '') + t; upd(); }
-      catch { toast('无法读取剪贴板，请手动 Ctrl+V 粘贴', { type: 'warn' }); }
-    } }, '从剪贴板粘贴');
-    const clrBtn = h('button', { class: 'btn sm', onclick: () => { ta.value = ''; upd(); } }, '清空');
+      catch { toast(L('无法读取剪贴板，请手动 Ctrl+V 粘贴', 'Cannot read the clipboard, please paste with Ctrl+V'), { type: 'warn' }); }
+    } }, L('从剪贴板粘贴', 'Paste from clipboard'));
+    const clrBtn = h('button', { class: 'btn sm', onclick: () => { ta.value = ''; upd(); } }, L('清空', 'Clear'));
     upd();
     setTimeout(() => ta.focus(), 0);
     return [
@@ -1090,7 +1104,7 @@
   function field(label, sect, key, { type = 'text', placeholder = '' } = {}) {
     const inp = h('input', { type, placeholder, value: cfg[sect][key] ?? '', style: 'flex:1;min-width:0' });
     inp.addEventListener('change', () => { cfg[sect][key] = inp.value.trim(); saveCfg(); renderButtons(); });
-    return h('div', { class: 'line' }, h('span', { class: 'mut', style: 'width:64px;flex:none' }, label), inp);
+    return h('div', { class: 'line' }, h('span', { class: 'mut', style: 'width:76px;flex:none' }, label), inp);
   }
   function targetSection(sect, title, fields, hint) {
     const on = cfg[sect].enabled;
@@ -1101,76 +1115,84 @@
       saveCfg(); renderPanel(); renderButtons();
     });
     const result = h('span', { class: 'mut grow' });
-    const testBtn = h('button', { class: 'btn sm' }, '测试连接');
+    const testBtn = h('button', { class: 'btn sm' }, L('测试连接', 'Test connection'));
     testBtn.addEventListener('click', async () => {
-      testBtn.disabled = true; result.style.color = ''; result.textContent = '连接中…';
+      testBtn.disabled = true; result.style.color = ''; result.textContent = L('连接中…', 'Connecting…');
       try { result.textContent = '✅ ' + await testTarget(sect); result.style.color = 'var(--ok)'; }
       catch (e) { result.textContent = '❌ ' + e.message; result.style.color = 'var(--err)'; }
       testBtn.disabled = false;
     });
     return h('div', { class: 'sec' },
-      h('div', { class: 'line', style: 'margin-top:0' }, h('label', { class: 'ck', style: 'color:var(--fg);font-weight:600' }, ck, `启用 ${title}`)),
+      h('div', { class: 'line', style: 'margin-top:0' }, h('label', { class: 'ck', style: 'color:var(--fg);font-weight:600' }, ck, L(`启用 ${title}`, `Enable ${title}`))),
       on ? [...fields, h('div', { class: 'line' }, testBtn, result), hint ? h('div', { class: 'mut' }, hint) : null] : null);
   }
 
   function settingsView() {
     const defSel = h('select', { style: 'flex:1;min-width:0' },
-      ...[['115', '115 云下载', true], ['aria2', 'aria2', cfg.aria2.enabled], ['qbit', 'qBittorrent', cfg.qbit.enabled]]
+      ...[['115', L('115 云下载', '115 cloud download'), true], ['aria2', 'aria2', cfg.aria2.enabled], ['qbit', 'qBittorrent', cfg.qbit.enabled]]
         .filter(x => x[2]).map(([v, t]) => { const o = h('option', { value: v }, t); if (v === cfg.defaultTarget) o.selected = true; return o; }));
     defSel.addEventListener('change', () => { cfg.defaultTarget = defSel.value; saveCfg(); P.destKey = ''; renderButtons(); });
-    const loginLine = h('span', { class: 'grow' }, '检测中…');
+    const langSel = h('select', { style: 'flex:1;min-width:0' },
+      ...[['auto', L('跟随浏览器', 'Follow browser')], ['zh', '中文'], ['en', 'English']]
+        .map(([v, t]) => { const o = h('option', { value: v }, t); if (v === cfg.lang) o.selected = true; return o; }));
+    langSel.addEventListener('change', () => { cfg.lang = langSel.value; saveCfg(); renderPanel(); refreshAll(); });
+    const loginLine = h('span', { class: 'grow' }, L('检测中…', 'Checking…'));
     checkLogin().then(r => {
-      loginLine.textContent = r.ok ? `✅ 已登录：${r.name}` : r.ok === false ? '❌ 未登录 115' : '⚠️ 无法确认登录状态';
+      loginLine.textContent = r.ok ? L(`✅ 已登录：${r.name}`, `✅ Signed in: ${r.name}`) : r.ok === false ? L('❌ 未登录 115', '❌ Not signed in to 115') : L('⚠️ 无法确认登录状态', '⚠️ Unable to check sign-in status');
     });
     const favChips = cfg.favFolders.map((f, i) => h('span', { class: 'chip', title: `cid: ${f.cid}` }, f.name,
-      h('button', { title: '移除', onclick: () => { cfg.favFolders.splice(i, 1); saveCfg(); renderPanel(); } }, icon('close', 12))));
+      h('button', { title: L('移除', 'Remove'), onclick: () => { cfg.favFolders.splice(i, 1); saveCfg(); renderPanel(); } }, icon('close', 12))));
     const disChips = cfg.disabledHosts.map((d, i) => h('span', { class: 'chip' }, d,
-      h('button', { title: '移除', onclick: () => { cfg.disabledHosts.splice(i, 1); saveCfg(); renderPanel(); } }, icon('close', 12))));
+      h('button', { title: L('移除', 'Remove'), onclick: () => { cfg.disabledHosts.splice(i, 1); saveCfg(); renderPanel(); } }, icon('close', 12))));
     const histN = Object.keys(history.load()).length;
 
     return [h('div', { class: 'bd' },
-      h('div', { class: 'sec' }, h('h4', null, '默认下载方式'),
-        h('div', { class: 'line' }, h('span', { class: 'mut', style: 'width:64px;flex:none' }, '点击按钮'), defSel),
-        h('div', { class: 'mut' }, '页面按钮点击即发送到这里；右键按钮或在面板底部可临时选择其它目标。启用 aria2 / qBittorrent 后才会出现在列表中。')),
-      h('div', { class: 'sec' }, h('h4', null, '115 账号'),
+      h('div', { class: 'sec' }, h('h4', null, L('默认下载方式', 'Default target')),
+        h('div', { class: 'line' }, h('span', { class: 'mut', style: 'width:76px;flex:none' }, L('点击按钮', 'On click')), defSel),
+        h('div', { class: 'mut' }, L('页面按钮点击即发送到这里；右键按钮或在面板底部可临时选择其它目标。启用 aria2 / qBittorrent 后才会出现在列表中。',
+          'Clicking a page button sends here. Right-click a button or use the panel footer to pick another target. aria2 / qBittorrent appear after you enable them below.'))),
+      h('div', { class: 'sec' }, h('h4', null, L('115 账号', '115 account')),
         h('div', { class: 'line' }, loginLine,
-          h('button', { class: 'btn sm', onclick: () => openTab(URL_LOGIN) }, '登录 / 打开 115'),
-          h('button', { class: 'btn sm', onclick: () => openTab(URL_OFFLINE) }, '云下载列表')),
-        h('div', { class: 'mut' }, '提示“请验证账号 / 911”时，在 115 网页版云下载中手动添加一次任务完成验证即可。')),
-      h('div', { class: 'sec' }, h('h4', null, '保存目录'),
-        h('div', { class: 'line' }, h('span', { class: 'grow', title: cfg.folderId ? `cid: ${cfg.folderId}` : '' }, `默认：${folderLabel()}`),
-          h('button', { class: 'btn sm', onclick: () => openFolderPicker('设置默认保存目录', f => { cfg.folderId = f.cid; cfg.folderName = f.name; saveCfg(); renderPanel(); toast(`默认目录已设为「${f.name}」`, { type: 'ok' }); }) }, '更改'),
-          cfg.folderId ? h('button', { class: 'btn sm', onclick: () => { cfg.folderId = ''; cfg.folderName = ''; saveCfg(); renderPanel(); } }, '恢复 115 默认') : null),
-        h('div', { class: 'line' }, h('span', { class: 'mut' }, '常用目录：'), ...(favChips.length ? favChips : [h('span', { class: 'mut' }, '无')]),
-          h('button', { class: 'btn sm', onclick: () => openFolderPicker('添加常用目录', f => { if (!cfg.favFolders.some(x => x.cid === f.cid)) { cfg.favFolders.push(f); saveCfg(); } renderPanel(); }) }, '+ 添加'))),
+          h('button', { class: 'btn sm', onclick: () => openTab(URL_LOGIN) }, L('登录 / 打开 115', 'Sign in / open 115')),
+          h('button', { class: 'btn sm', onclick: () => openTab(URL_OFFLINE) }, L('云下载列表', 'Download list'))),
+        h('div', { class: 'mut' }, L('提示“请验证账号 / 911”时，在 115 网页版云下载中手动添加一次任务完成验证即可。',
+          'If you see "please verify your account" / error 911, add one task manually in 115 web cloud download to verify.'))),
+      h('div', { class: 'sec' }, h('h4', null, L('115 保存目录', '115 save folder')),
+        h('div', { class: 'line' }, h('span', { class: 'grow', title: cfg.folderId ? `cid: ${cfg.folderId}` : '' }, L(`默认：${folderLabel()}`, `Default: ${folderLabel()}`)),
+          h('button', { class: 'btn sm', onclick: () => openFolderPicker(L('设置默认保存目录', 'Set default save folder'), f => { cfg.folderId = f.cid; cfg.folderName = f.name; saveCfg(); renderPanel(); toast(L(`默认目录已设为「${f.name}」`, `Default folder set to "${f.name}"`), { type: 'ok' }); }) }, L('更改', 'Change')),
+          cfg.folderId ? h('button', { class: 'btn sm', onclick: () => { cfg.folderId = ''; cfg.folderName = ''; saveCfg(); renderPanel(); } }, L('恢复 115 默认', 'Reset to 115 default')) : null),
+        h('div', { class: 'line' }, h('span', { class: 'mut' }, L('常用目录：', 'Favorites:')), ...(favChips.length ? favChips : [h('span', { class: 'mut' }, L('无', 'none'))]),
+          h('button', { class: 'btn sm', onclick: () => openFolderPicker(L('添加常用目录', 'Add favorite folder'), f => { if (!cfg.favFolders.some(x => x.cid === f.cid)) { cfg.favFolders.push(f); saveCfg(); } renderPanel(); }) }, L('+ 添加', '+ Add')))),
       targetSection('aria2', 'aria2', [
-        field('RPC 地址', 'aria2', 'rpc', { placeholder: 'http://localhost:6800/jsonrpc' }),
-        field('密钥', 'aria2', 'secret', { type: 'password', placeholder: 'rpc-secret（没有则留空）' }),
-        field('保存目录', 'aria2', 'dir', { placeholder: '留空使用 aria2 默认目录' }),
-      ], '需以 --enable-rpc 启动 aria2；非本机地址首次连接会弹窗确认。'),
+        field(L('RPC 地址', 'RPC URL'), 'aria2', 'rpc', { placeholder: 'http://localhost:6800/jsonrpc' }),
+        field(L('密钥', 'Secret'), 'aria2', 'secret', { type: 'password', placeholder: L('rpc-secret（没有则留空）', 'rpc-secret (leave empty if none)') }),
+        field(L('保存目录', 'Save folder'), 'aria2', 'dir', { placeholder: L('留空使用 aria2 默认目录', 'Empty = aria2 default') }),
+      ], L('需以 --enable-rpc 启动 aria2；非本机地址首次连接会弹窗确认。', 'aria2 must run with --enable-rpc. Non-local addresses ask for confirmation on first use.')),
       targetSection('qbit', 'qBittorrent', [
         field('WebUI', 'qbit', 'url', { placeholder: 'http://localhost:8080' }),
-        field('用户名', 'qbit', 'username', { placeholder: 'admin' }),
-        field('密码', 'qbit', 'password', { type: 'password' }),
-        field('保存目录', 'qbit', 'savepath', { placeholder: '留空使用默认' }),
-        field('分类', 'qbit', 'category', { placeholder: '可选' }),
-      ], '需在 qBittorrent「设置 → WebUI」中启用；若开启了 CSRF / Host 头校验导致失败，可在 WebUI 设置中关闭或加入白名单。'),
-      h('div', { class: 'sec' }, h('h4', null, '探测与显示（部分选项刷新页面后生效）'),
-        toggleRow('在链接旁显示 115 按钮', 'inlineButtons'),
-        toggleRow('把纯文本中的磁力链接转为可点击链接', 'linkifyText'),
-        toggleRow('识别 ed2k 链接', 'detectEd2k'),
-        toggleRow('识别纯 40 位 BT 哈希', 'detectBareHash', '可能误判 git 提交号等'),
-        toggleRow('显示悬浮球', 'showBadge'),
-        toggleRow('页面无链接时隐藏悬浮球', 'hideBadgeWhenEmpty')),
-      h('div', { class: 'sec' }, h('h4', null, '站点'),
+        field(L('用户名', 'Username'), 'qbit', 'username', { placeholder: 'admin' }),
+        field(L('密码', 'Password'), 'qbit', 'password', { type: 'password' }),
+        field(L('保存目录', 'Save path'), 'qbit', 'savepath', { placeholder: L('留空使用默认', 'Empty = default') }),
+        field(L('分类', 'Category'), 'qbit', 'category', { placeholder: L('可选', 'Optional') }),
+      ], L('需在 qBittorrent「设置 → WebUI」中启用；若开启了 CSRF / Host 头校验导致失败，可在 WebUI 设置中关闭或加入白名单。',
+        'Enable it in qBittorrent "Options → WebUI". If CSRF / Host header validation blocks requests, disable it or whitelist the address.')),
+      h('div', { class: 'sec' }, h('h4', null, L('探测与显示（部分选项刷新页面后生效）', 'Detection & display (some options apply after reload)')),
+        toggleRow(L('在链接旁显示发送按钮', 'Show send buttons next to links'), 'inlineButtons'),
+        toggleRow(L('把纯文本中的磁力链接转为可点击链接', 'Turn plain-text magnets into clickable links'), 'linkifyText'),
+        toggleRow(L('识别 ed2k 链接', 'Detect ed2k links'), 'detectEd2k'),
+        toggleRow(L('识别纯 40 位 BT 哈希', 'Detect bare 40-char BT hashes'), 'detectBareHash', L('可能误判 git 提交号等', 'may match git commit IDs')),
+        toggleRow(L('显示悬浮球', 'Show floating button'), 'showBadge'),
+        toggleRow(L('页面无链接时隐藏悬浮球', 'Hide floating button when no links'), 'hideBadgeWhenEmpty')),
+      h('div', { class: 'sec' }, h('h4', null, L('站点', 'Sites')),
         h('div', { class: 'line' }, h('span', { class: 'grow' }, HOST),
-          h('button', { class: 'btn sm', onclick: () => { if (!cfg.disabledHosts.includes(HOST)) cfg.disabledHosts.push(HOST); saveCfg(); toast('已在此站点禁用，刷新后生效', { type: 'ok' }); renderPanel(); } }, '在此站点禁用')),
-        disChips.length ? h('div', { class: 'line' }, h('span', { class: 'mut' }, '已禁用：'), ...disChips) : null),
-      h('div', { class: 'sec' }, h('h4', null, '记录与快捷键'),
-        h('div', { class: 'line' }, h('span', { class: 'grow' }, `已添加记录 ${histN} 条（用于标记“添加过”）`),
-          h('button', { class: 'btn sm', onclick: () => { if (confirm('清空全部已添加记录？')) { history.clear(); refreshAll(); } } }, '清空')),
-        h('div', { class: 'mut' }, h('span', { class: 'kbd' }, 'Alt+Shift+M'), ' 打开/关闭面板（若选中了含链接的文字，会直接进入手动添加）；',
-          h('span', { class: 'kbd' }, 'Esc'), ' 关闭；页面按钮：右键选择目录，Alt+点击复制。'))),
+          h('button', { class: 'btn sm', onclick: () => { if (!cfg.disabledHosts.includes(HOST)) cfg.disabledHosts.push(HOST); saveCfg(); toast(L('已在此站点禁用，刷新后生效', 'Disabled on this site, takes effect after reload'), { type: 'ok' }); renderPanel(); } }, L('在此站点禁用', 'Disable on this site'))),
+        disChips.length ? h('div', { class: 'line' }, h('span', { class: 'mut' }, L('已禁用：', 'Disabled:')), ...disChips) : null),
+      h('div', { class: 'sec' }, h('h4', null, L('语言、记录与快捷键', 'Language, history & shortcuts')),
+        h('div', { class: 'line' }, h('span', { class: 'mut', style: 'width:76px;flex:none' }, L('界面语言', 'Language')), langSel),
+        h('div', { class: 'line' }, h('span', { class: 'grow' }, L(`已添加记录 ${histN} 条（用于标记“添加过”）`, `${histN} links in history (used to mark "added before")`)),
+          h('button', { class: 'btn sm', onclick: () => { if (confirm(L('清空全部已添加记录？', 'Clear all history?'))) { history.clear(); refreshAll(); } } }, L('清空', 'Clear'))),
+        h('div', { class: 'mut' }, h('span', { class: 'kbd' }, 'Alt+Shift+M'), L(' 打开/关闭面板（若选中了含链接的文字，会直接进入手动添加）；', ' toggles the panel (with link text selected, opens manual add); '),
+          h('span', { class: 'kbd' }, 'Esc'), L(' 关闭；页面按钮：右键选择目标，Alt+点击复制。', ' closes. Page buttons: right-click to choose target, Alt+click to copy.')))),
     ];
   }
 
@@ -1198,10 +1220,10 @@
     }
   }, true);
 
-  menu('🧲 打开 115 磁力面板', () => openPanel('links'));
-  menu('📋 手动添加链接', () => openPanel('manual'));
-  menu('⚙️ 设置', () => openPanel('settings'));
-  menu(`🚫 在 ${HOST} 禁用`, () => { cfg.disabledHosts.push(HOST); saveCfg(); location.reload(); });
+  menu(L('🧲 打开磁力面板', '🧲 Open magnet panel'), () => openPanel('links'));
+  menu(L('📋 手动添加链接', '📋 Add links manually'), () => openPanel('manual'));
+  menu(L('⚙️ 设置', '⚙️ Settings'), () => openPanel('settings'));
+  menu(L(`🚫 在 ${HOST} 禁用`, `🚫 Disable on ${HOST}`), () => { cfg.disabledHosts.push(HOST); saveCfg(); location.reload(); });
 
   // 同步其它标签页写入的历史
   window.addEventListener('focus', () => { history.cache = history.load(); cfg = loadCfg(); refreshAll(); });

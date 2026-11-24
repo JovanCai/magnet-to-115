@@ -1,8 +1,12 @@
 # 磁力一键离线：115 / aria2 / qBittorrent
 
+**简体中文** | [English](README.en.md)
+
 一个油猴脚本：自动识别网页里的磁力 / ed2k 链接，一键或批量发送到 **115 云下载**、**aria2** 或 **qBittorrent**。
 
 **安装：[GreasyFork](https://greasyfork.org/scripts/607096)（推荐） · [GitHub 直装](https://raw.githubusercontent.com/JovanCai/magnet-to-115/main/magnet-to-115.user.js)**（需要先装好 Tampermonkey 或 Violentmonkey）
+
+界面语言默认跟随浏览器：浏览器语言是中文就显示中文，其它显示英文。也可以在设置里手动切换。
 
 ## 安装
 
@@ -42,7 +46,7 @@
 
 - **页面链接**：列出本页所有链接，带文件名、大小、哈希和状态。可以全选、筛选、隐藏已添加的，能在页面上定位到某条链接，也能单条或批量复制、发送。
 - **手动添加**：粘贴一段任意文本，脚本会把里面的链接提取出来。
-- **设置**：默认下载方式、115 账号与保存目录、aria2 / qBittorrent 连接、显示选项、按站点禁用。
+- **设置**：默认下载方式、115 账号与保存目录、aria2 / qBittorrent 连接、显示选项、按站点禁用、界面语言。
 
 **快捷键**
 
