@@ -2,12 +2,12 @@
 
 一个油猴脚本：自动识别网页里的磁力 / ed2k 链接，一键或批量发送到 **115 云下载**、**aria2** 或 **qBittorrent**。
 
-**[点此安装](https://raw.githubusercontent.com/JovanCai/magnet-to-115/main/magnet-to-115.user.js)**（需要先装好 Tampermonkey 或 Violentmonkey）
+**安装：[GreasyFork](https://greasyfork.org/scripts/607096)（推荐） · [GitHub 直装](https://raw.githubusercontent.com/JovanCai/magnet-to-115/main/magnet-to-115.user.js)**（需要先装好 Tampermonkey 或 Violentmonkey）
 
 ## 安装
 
 1. 安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/) 或 [Violentmonkey](https://violentmonkey.github.io/)。
-2. 打开上面的安装链接，在弹出的页面里点“安装”。
+2. 打开 [GreasyFork 脚本页](https://greasyfork.org/scripts/607096) 点“安装此脚本”，或者直接打开上面的 GitHub 直装链接，在弹出的页面里点“安装”。
 3. 用 115 的话，先在浏览器里登录 [115.com](https://115.com)。用 aria2 / qBittorrent 的话，在脚本设置里填好连接信息。
 
 脚本写了 `@updateURL`，之后的新版本会由扩展自动更新。
